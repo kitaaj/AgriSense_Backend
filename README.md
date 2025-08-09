@@ -851,66 +851,6 @@ The API uses standard HTTP status codes and returns consistent error responses:
 ```
 
 
-## Implementation Details
-
-### Database Models
-
-#### User Model
-```python
-class User(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(50), unique=True, nullable=False)
-    email = db.Column(db.String(100), unique=True, nullable=False)
-    password_hash = db.Column(db.String(255), nullable=False)
-    full_name = db.Column(db.String(100))
-    phone_number = db.Column(db.String(20))
-    is_active = db.Column(db.Boolean, default=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-```
-
-#### Farm Model
-```python
-class Farm(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    name = db.Column(db.String(100), nullable=False)
-    description = db.Column(db.String(500))
-    latitude = db.Column(db.Float, nullable=False)
-    longitude = db.Column(db.Float, nullable=False)
-    area = db.Column(db.Float)  # in hectares
-    crop_type = db.Column(db.String(50))
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-```
-
-#### SoilAnalysis Model
-```python
-class SoilAnalysis(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    farm_id = db.Column(db.Integer, db.ForeignKey('farm.id'), nullable=False)
-    latitude = db.Column(db.Float, nullable=False)
-    longitude = db.Column(db.Float, nullable=False)
-    depth = db.Column(db.String(10), nullable=False)
-    soil_properties = db.Column(db.JSON, nullable=False)
-    analyzed_at = db.Column(db.DateTime, nullable=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-```
-
-#### Recommendation Model
-```python
-class Recommendation(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    soil_analysis_id = db.Column(db.Integer, db.ForeignKey('soil_analysis.id'), nullable=False)
-    type = db.Column(db.String(50), nullable=False)  # fertilizer, amendment, practice
-    title = db.Column(db.String(200), nullable=False)
-    description = db.Column(db.String(1000), nullable=False)
-    dosage = db.Column(db.String(100))
-    timing = db.Column(db.String(100))
-    priority = db.Column(db.Integer, default=3)  # 1-5 scale
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-```
-
 ### Services
 
 #### iSDA Service
