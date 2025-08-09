@@ -1,257 +1,173 @@
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 import logging
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
 class RecommendationService:
-    """Service for generating farming recommendations based on soil analysis"""
+    """
+    Service for generating farming recommendations and health scores
+    based on a comprehensive iSDA soil analysis.
+    """
     
     def __init__(self):
-        # Optimal ranges for key soil properties
+        # Optimal ranges for key soil properties. Units are critical here.
+        # These are general values and can be customized for specific crops.
         self.optimal_ranges = {
-            "ph": {"min": 6.0, "max": 7.5, "unit": "pH"},
-            "carbon_organic": {"min": 2.0, "max": 4.0, "unit": "%"},
-            "nitrogen_total": {"min": 0.2, "max": 0.5, "unit": "%"},
-            "phosphorous_extractable": {"min": 20, "max": 50, "unit": "mg/kg"},
-            "potassium_extractable": {"min": 150, "max": 300, "unit": "mg/kg"}
+            "ph": {"min": 6.0, "max": 7.2, "unit": None},
+            "carbon_organic": {"min": 1.5, "max": 3.0, "unit": "%"}, # Converted from g/kg
+            "nitrogen_total": {"min": 0.15, "max": 0.3, "unit": "%"}, # Converted from g/kg
+            "phosphorous_extractable": {"min": 25, "max": 50, "unit": "ppm"}, # ppm is same as mg/kg
+            "potassium_extractable": {"min": 150, "max": 300, "unit": "ppm"},
+            "cation_exchange_capacity": {"min": 10, "max": 25, "unit": "cmol(+)/kg"},
+            "sulphur_extractable": {"min": 10, "max": 20, "unit": "ppm"},
+            "zinc_extractable": {"min": 1.5, "max": 5.0, "unit": "ppm"},
         }
-    
+
+    def _get_value_from_properties(self, properties: Dict, prop_name: str, depth: str) -> Optional[Any]:
+        """Helper to safely extract a single value for a given property and depth."""
+        try:
+            property_layers = properties.get(prop_name, [])
+            for layer in property_layers:
+                if layer.get("depth", {}).get("value") == depth:
+                    return layer.get("value", {}).get("value")
+            return None
+        except (AttributeError, TypeError):
+            return None
+
     def generate_recommendations(
         self, 
         soil_properties: Dict, 
-        crop_type: Optional[str] = None
+        crop_type: Optional[str] = None,
+        depth: str = "0-20"
     ) -> List[Dict]:
         """
-        Generate farming recommendations based on soil analysis
-        
-        Args:
-            soil_properties: Dictionary containing soil property values
-            crop_type: Type of crop being grown (optional)
-        
-        Returns:
-            List of recommendation dictionaries
+        Generate recommendations for a specific soil depth based on the full analysis.
         """
         recommendations = []
         
-        try:
-            # Analyze pH levels
-            ph_recommendations = self._analyze_ph(soil_properties.get("ph", []))
-            recommendations.extend(ph_recommendations)
+        # A map of property names to their analysis functions
+        analysis_functions = {
+            "ph": self._analyze_ph,
+            "carbon_organic": self._analyze_organic_carbon,
+            "nitrogen_total": self._analyze_nitrogen,
+            "phosphorous_extractable": self._analyze_phosphorus,
+            "potassium_extractable": self._analyze_potassium,
+            "cation_exchange_capacity": self._analyze_cec,
+            "sulphur_extractable": self._analyze_sulphur,
+            "zinc_extractable": self._analyze_zinc,
+            "texture_class": self._analyze_texture,
+        }
+
+        for prop_name, func in analysis_functions.items():
+            value = self._get_value_from_properties(soil_properties, prop_name, depth)
+            if value is not None:
+                rec = func(value)
+                if rec:
+                    recommendations.extend(rec)
             
-            # Analyze organic carbon
-            carbon_recommendations = self._analyze_organic_carbon(soil_properties.get("carbon_organic", []))
-            recommendations.extend(carbon_recommendations)
-            
-            # Analyze nitrogen
-            nitrogen_recommendations = self._analyze_nitrogen(soil_properties.get("nitrogen_total", []))
-            recommendations.extend(nitrogen_recommendations)
-            
-            # Analyze phosphorus
-            phosphorus_recommendations = self._analyze_phosphorus(soil_properties.get("phosphorous_extractable", []))
-            recommendations.extend(phosphorus_recommendations)
-            
-            # Analyze potassium
-            potassium_recommendations = self._analyze_potassium(soil_properties.get("potassium_extractable", []))
-            recommendations.extend(potassium_recommendations)
-            
-            # Sort by priority (1 = highest priority)
-            recommendations.sort(key=lambda x: x.get("priority", 5))
-            
-            return recommendations
-            
-        except Exception as e:
-            logger.error(f"Error generating recommendations: {str(e)}")
-            return []
-    
-    def _extract_value(self, property_data: List[Dict]) -> Optional[float]:
-        """Extract value from iSDA property data structure"""
-        try:
-            if property_data and len(property_data) > 0:
-                value_data = property_data[0].get("value", {})
-                return value_data.get("value")
-            return None
-        except:
-            return None
-    
-    def _analyze_ph(self, ph_data: List[Dict]) -> List[Dict]:
-        """Analyze pH levels and generate recommendations"""
-        recommendations = []
-        ph_value = self._extract_value(ph_data)
-        
-        if ph_value is None:
-            return recommendations
-        
-        if ph_value < 5.5:
-            recommendations.append({
-                "type": "amendment",
-                "title": "Apply Lime",
-                "description": f"Soil pH is {ph_value:.1f}, which is too acidic. Apply agricultural lime to raise pH to optimal range (6.0-7.5). This will improve nutrient availability and reduce aluminum toxicity.",
-                "dosage": "2-4 tons per hectare",
-                "timing": "Apply 3-4 months before planting",
-                "priority": 1
-            })
-        elif ph_value > 8.0:
-            recommendations.append({
-                "type": "amendment",
-                "title": "Apply Sulfur",
-                "description": f"Soil pH is {ph_value:.1f}, which is too alkaline. Apply elemental sulfur to lower pH to optimal range (6.0-7.5).",
-                "dosage": "200-500 kg per hectare",
-                "timing": "Apply 2-3 months before planting",
-                "priority": 1
-            })
-        
+        recommendations.sort(key=lambda x: x.get("priority", 5))
         return recommendations
+
+    def get_soil_health_score(self, soil_properties: Dict, depth: str = "0-20") -> Dict:
+        """Calculate overall soil health score based on key properties at a specific depth."""
+        scores = {}
+        total_score = 0
+        property_count = 0
+        
+        for prop, optimal in self.optimal_ranges.items():
+            value = self._get_value_from_properties(soil_properties, prop, depth)
+            if value is not None:
+                # CRITICAL: Handle unit conversions before scoring
+                original_unit = soil_properties.get(prop, [{}])[0].get("value", {}).get("unit")
+                if original_unit == "g/kg" and optimal["unit"] == "%":
+                    value /= 10
+                
+                score = self._calculate_property_score(value, optimal["min"], optimal["max"])
+                scores[prop] = round(score)
+                total_score += score
+                property_count += 1
+        
+        overall_score = total_score / property_count if property_count > 0 else 0
+        
+        if overall_score >= 80: health_category = "Excellent"
+        elif overall_score >= 60: health_category = "Good"
+        elif overall_score >= 40: health_category = "Fair"
+        else: health_category = "Poor"
+        
+        return {
+            "overall_score": round(overall_score),
+            "health_category": health_category,
+            "property_scores": scores,
+            "analysis_depth": depth
+        }
+
+    def _calculate_property_score(self, value: float, min_val: float, max_val: float) -> float:
+        """Generic function to calculate a score from 0 to 100 based on an optimal range."""
+        if min_val <= value <= max_val:
+            return 100
+        elif value < min_val:
+            # Score decreases from 100 to 0 as value moves from min_val to 0.
+            return max(0, 100 * (value / min_val))
+        else: # value > max_val
+            # Score decreases from 100 to 0 as value moves from max_val to 2*max_val.
+            return max(0, 100 * (1 - (value - max_val) / max_val))
+            
+    # --- Individual Property Analysis Methods ---
+
+    def _analyze_ph(self, value: float) -> List[Dict]:
+        if value < 5.5:
+            return [{"type": "amendment", "title": "Correct Low pH", "description": f"Soil pH is {value:.1f}, which is very acidic. Apply agricultural lime to raise the pH. This improves nutrient availability and reduces potential aluminum toxicity.", "priority": 1}]
+        if value > 7.8:
+            return [{"type": "amendment", "title": "Correct High pH", "description": f"Soil pH is {value:.1f}, which is alkaline. Apply elemental sulfur or use acidifying fertilizers (like ammonium sulfate) to lower the pH.", "priority": 1}]
+        return []
+
+    def _analyze_organic_carbon(self, value: float) -> List[Dict]:
+        # The value from API is in g/kg. Convert to % by dividing by 10.
+        value_percent = value / 10
+        if value_percent < 1.0:
+            return [{"type": "management", "title": "Increase Organic Matter", "description": f"Organic Carbon is low at {value_percent:.2f}%. Incorporate compost, manure, cover crops, or crop residues to improve soil structure, water retention, and fertility.", "priority": 2}]
+        return []
+
+    def _analyze_nitrogen(self, value: float) -> List[Dict]:
+        # The value from API is in g/kg. Convert to % by dividing by 10.
+        value_percent = value / 10
+        if value_percent < 0.1:
+            return [{"type": "fertilizer", "title": "Apply Nitrogen (N)", "description": f"Total Nitrogen is very low at {value_percent:.2f}%. Apply a nitrogen-based fertilizer. Consider split applications to match crop needs and reduce loss.", "priority": 1}]
+        return []
+
+    def _analyze_phosphorus(self, value: float) -> List[Dict]:
+        if value < 20:
+            return [{"type": "fertilizer", "title": "Apply Phosphorus (P)", "description": f"Extractable Phosphorus is low at {value:.1f} ppm. Apply a phosphorus fertilizer (e.g., MAP, DAP) at planting to support root development.", "priority": 2}]
+        return []
+
+    def _analyze_potassium(self, value: float) -> List[Dict]:
+        if value < 120:
+            return [{"type": "fertilizer", "title": "Apply Potassium (K)", "description": f"Extractable Potassium is low at {value:.1f} ppm. Apply a potassium fertilizer (e.g., MOP, SOP) to improve plant vigor and stress resistance.", "priority": 2}]
+        return []
     
-    def _analyze_organic_carbon(self, carbon_data: List[Dict]) -> List[Dict]:
-        """Analyze organic carbon levels and generate recommendations"""
-        recommendations = []
-        carbon_value = self._extract_value(carbon_data)
+    def _analyze_cec(self, value: float) -> List[Dict]:
+        if value < 8:
+            return [{"type": "insight", "title": "Low Nutrient Holding Capacity", "description": f"Cation Exchange Capacity (CEC) is low at {value:.1f} cmol(+)/kg. This indicates a sandy or low-organic matter soil that struggles to retain nutrients. Frequent, small applications of fertilizer are more effective than single large ones. Building organic matter is key.", "priority": 3}]
+        return []
+
+    def _analyze_sulphur(self, value: float) -> List[Dict]:
+        if value < 8:
+            return [{"type": "fertilizer", "title": "Apply Sulphur (S)", "description": f"Sulphur level is low at {value:.1f} ppm. Consider using sulphur-containing fertilizers like ammonium sulphate or gypsum.", "priority": 3}]
+        return []
+
+    def _analyze_zinc(self, value: float) -> List[Dict]:
+        if value < 1.0:
+            return [{"type": "micronutrient", "title": "Apply Zinc (Zn)", "description": f"Zinc level is low at {value:.1f} ppm. A foliar spray or soil application of a zinc supplement may be needed, especially for sensitive crops like maize.", "priority": 4}]
+        return []
         
-        if carbon_value is None:
-            return recommendations
-        
-        if carbon_value < 1.5:
-            recommendations.append({
-                "type": "amendment",
-                "title": "Add Organic Matter",
-                "description": f"Organic carbon is {carbon_value:.1f}%, which is low. Incorporate compost, manure, or crop residues to improve soil structure and fertility.",
-                "dosage": "5-10 tons compost per hectare",
-                "timing": "Apply before planting season",
-                "priority": 2
-            })
-        
-        return recommendations
-    
-    def _analyze_nitrogen(self, nitrogen_data: List[Dict]) -> List[Dict]:
-        """Analyze nitrogen levels and generate recommendations"""
-        recommendations = []
-        nitrogen_value = self._extract_value(nitrogen_data)
-        
-        if nitrogen_value is None:
-            return recommendations
-        
-        if nitrogen_value < 0.15:
-            recommendations.append({
-                "type": "fertilizer",
-                "title": "Apply Nitrogen Fertilizer",
-                "description": f"Total nitrogen is {nitrogen_value:.2f}%, which is low. Apply nitrogen fertilizer to support crop growth.",
-                "dosage": "100-150 kg N per hectare",
-                "timing": "Split application: 1/3 at planting, 2/3 at 6 weeks",
-                "priority": 2
-            })
-        
-        return recommendations
-    
-    def _analyze_phosphorus(self, phosphorus_data: List[Dict]) -> List[Dict]:
-        """Analyze phosphorus levels and generate recommendations"""
-        recommendations = []
-        phosphorus_value = self._extract_value(phosphorus_data)
-        
-        if phosphorus_value is None:
-            return recommendations
-        
-        if phosphorus_value < 15:
-            recommendations.append({
-                "type": "fertilizer",
-                "title": "Apply Phosphorus Fertilizer",
-                "description": f"Available phosphorus is {phosphorus_value:.1f} mg/kg, which is low. Apply phosphorus fertilizer to support root development and flowering.",
-                "dosage": "40-60 kg P2O5 per hectare",
-                "timing": "Apply at planting",
-                "priority": 2
-            })
-        
-        return recommendations
-    
-    def _analyze_potassium(self, potassium_data: List[Dict]) -> List[Dict]:
-        """Analyze potassium levels and generate recommendations"""
-        recommendations = []
-        potassium_value = self._extract_value(potassium_data)
-        
-        if potassium_value is None:
-            return recommendations
-        
-        if potassium_value < 100:
-            recommendations.append({
-                "type": "fertilizer",
-                "title": "Apply Potassium Fertilizer",
-                "description": f"Available potassium is {potassium_value:.1f} mg/kg, which is low. Apply potassium fertilizer to improve disease resistance and water use efficiency.",
-                "dosage": "50-80 kg K2O per hectare",
-                "timing": "Apply at planting",
-                "priority": 3
-            })
-        
-        return recommendations
-    
-    def get_soil_health_score(self, soil_properties: Dict) -> Dict:
-        """Calculate overall soil health score based on key properties"""
-        try:
-            scores = {}
-            total_score = 0
-            property_count = 0
-            
-            # Score each property (0-100 scale)
-            for prop, data in soil_properties.items():
-                if prop in self.optimal_ranges:
-                    value = self._extract_value(data)
-                    if value is not None:
-                        score = self._calculate_property_score(prop, value)
-                        scores[prop] = score
-                        total_score += score
-                        property_count += 1
-            
-            overall_score = total_score / property_count if property_count > 0 else 0
-            
-            # Determine health category
-            if overall_score >= 80:
-                health_category = "Excellent"
-            elif overall_score >= 60:
-                health_category = "Good"
-            elif overall_score >= 40:
-                health_category = "Fair"
-            else:
-                health_category = "Poor"
-            
-            return {
-                "overall_score": round(overall_score, 1),
-                "health_category": health_category,
-                "property_scores": scores,
-                "analyzed_at": datetime.utcnow().isoformat()
-            }
-            
-        except Exception as e:
-            logger.error(f"Error calculating soil health score: {str(e)}")
-            return {"overall_score": 0, "health_category": "Unknown", "property_scores": {}}
-    
-    def _calculate_property_score(self, property_name: str, value: float) -> float:
-        """Calculate score for individual soil property (0-100 scale)"""
-        try:
-            optimal = self.optimal_ranges.get(property_name)
-            if not optimal:
-                return 50  # Default score if no optimal range defined
-            
-            min_val = optimal["min"]
-            max_val = optimal["max"]
-            
-            if min_val <= value <= max_val:
-                return 100  # Perfect score within optimal range
-            elif value < min_val:
-                # Score decreases as value goes below minimum
-                if value <= min_val * 0.5:
-                    return 0
-                else:
-                    return 50 * (value / min_val)
-            else:
-                # Score decreases as value goes above maximum
-                if value >= max_val * 2:
-                    return 0
-                else:
-                    return 50 * (max_val / value)
-                    
-        except Exception as e:
-            logger.error(f"Error calculating property score: {str(e)}")
-            return 50
+    def _analyze_texture(self, value: str) -> List[Dict]:
+        if "Clay" in value:
+            return [{"type": "management", "title": "Manage Clay Texture", "description": f"Soil texture is '{value}'. Clay soils have excellent water and nutrient retention but can be prone to compaction and poor drainage. Avoid working the soil when wet and incorporate organic matter to improve structure.", "priority": 5}]
+        if "Sandy" in value:
+            return [{"type": "management", "title": "Manage Sandy Texture", "description": f"Soil texture is '{value}'. Sandy soils have excellent drainage but poor water and nutrient retention. Frequent irrigation and split fertilizer applications are recommended. Building organic matter is critical.", "priority": 5}]
+        return []
+
 
 # Global instance for the service
 recommendation_service = RecommendationService()
-

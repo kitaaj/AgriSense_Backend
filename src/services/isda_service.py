@@ -1,13 +1,16 @@
 import requests
 import logging
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 from datetime import datetime, timedelta
 import json
 
 logger = logging.getLogger(__name__)
 
 class ISDAService:
-    """Service for interacting with iSDA Africa soil data API"""
+    """
+    Service for interacting with the iSDAsoil API.
+    Refactored for efficiency and full data coverage.
+    """
     
     def __init__(self):
         self.base_url = "https://api.isda-africa.com"
@@ -15,36 +18,26 @@ class ISDAService:
         self.token_expires_at = None
         
     def authenticate(self, username: str, password: str) -> bool:
-        """Authenticate with iSDA API and get access token"""
+        """Authenticate with iSDA API and get an access token."""
         try:
-            payload = {
-                "username": username,
-                "password": password
-            }
+            payload = {"username": username, "password": password}
+            response = requests.post(f"{self.base_url}/login", data=payload, timeout=30)
             
-            response = requests.post(
-                f"{self.base_url}/login",
-                data=payload,
-                timeout=30
-            )
+            response.raise_for_status()  # Raise an exception for bad status codes (4xx or 5xx)
             
-            if response.status_code == 200:
-                data = response.json()
-                self.access_token = data.get("access_token")
-                # Token expires in 60 minutes according to docs
-                self.token_expires_at = datetime.utcnow() + timedelta(minutes=55)
-                logger.info("Successfully authenticated with iSDA API")
-                return True
-            else:
-                logger.error(f"Authentication failed: {response.status_code} - {response.text}")
-                return False
+            data = response.json()
+            self.access_token = data.get("access_token")
+            # Token expires in 60 minutes, refresh a bit earlier
+            self.token_expires_at = datetime.utcnow() + timedelta(minutes=55)
+            logger.info("Successfully authenticated with iSDA API")
+            return True
                 
-        except Exception as e:
-            logger.error(f"Authentication error: {str(e)}")
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Authentication error: {e}")
             return False
     
     def _is_token_valid(self) -> bool:
-        """Check if current token is valid and not expired"""
+        """Check if the current token is valid and not expired."""
         return (
             self.access_token is not None and 
             self.token_expires_at is not None and 
@@ -52,9 +45,11 @@ class ISDAService:
         )
     
     def _get_headers(self) -> Dict[str, str]:
-        """Get headers with authorization token"""
+        """Get headers with the authorization token."""
         if not self._is_token_valid():
-            raise Exception("No valid access token. Please authenticate first.")
+            # This should ideally be handled by re-authenticating.
+            # For simplicity, we raise an error to be caught by the calling function.
+            raise ConnectionError("No valid access token. Please authenticate first.")
         
         return {
             "Authorization": f"Bearer {self.access_token}",
@@ -62,150 +57,90 @@ class ISDAService:
         }
     
     def get_available_layers(self) -> Optional[Dict]:
-        """Get metadata about available soil property layers"""
+        """Get metadata about available soil property layers."""
         try:
             headers = self._get_headers()
-            response = requests.get(
-                f"{self.base_url}/isdasoil/v2/layers",
-                headers=headers,
-                timeout=30
-            )
-            
-            if response.status_code == 200:
-                return response.json()
-            else:
-                logger.error(f"Failed to get layers: {response.status_code} - {response.text}")
-                return None
-                
-        except Exception as e:
-            logger.error(f"Error getting layers: {str(e)}")
+            response = requests.get(f"{self.base_url}/isdasoil/v2/layers", headers=headers, timeout=30)
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error getting iSDA layers: {e}")
             return None
     
-    def get_soil_properties(
-        self, 
-        latitude: float, 
-        longitude: float, 
-        depth: Optional[str] = None,
-        property_name: Optional[str] = None
-    ) -> Optional[Dict]:
+    def get_all_soil_properties(self, latitude: float, longitude: float) -> Optional[Dict]:
         """
-        Get soil properties for a specific location
-        
+        Get all available soil properties for a specific location in a single API call.
+        This is the primary method to fetch soil data.
+
         Args:
             latitude: Latitude coordinate (-90 to 90)
             longitude: Longitude coordinate (-180 to 180)
-            depth: Soil depth (e.g., "0-20", "20-50", "0-50", "0-200")
-            property_name: Specific property to retrieve (e.g., "ph", "carbon_organic")
         
         Returns:
-            Dictionary containing soil property data or None if failed
+            A dictionary containing the full soil property data or None if failed.
         """
         try:
-            # Validate coordinates
             if not (-90 <= latitude <= 90):
                 raise ValueError("Latitude must be between -90 and 90")
             if not (-180 <= longitude <= 180):
                 raise ValueError("Longitude must be between -180 and 180")
             
             headers = self._get_headers()
+            params = {"lat": latitude, "lon": longitude}
             
-            # Build query parameters
-            params = {
-                "lat": latitude,
-                "lon": longitude
-            }
-            
-            if depth:
-                params["depth"] = depth
-            if property_name:
-                params["property"] = property_name
-            
+            # By not specifying a 'property' or 'depth', the API returns all available data.
             response = requests.get(
                 f"{self.base_url}/isdasoil/v2/soilproperty",
                 headers=headers,
                 params=params,
-                timeout=30
+                timeout=45  # Increased timeout for potentially larger response
             )
             
-            if response.status_code == 200:
-                return response.json()
-            else:
-                logger.error(f"Failed to get soil properties: {response.status_code} - {response.text}")
-                return None
+            response.raise_for_status()
+            return response.json()
                 
-        except Exception as e:
-            logger.error(f"Error getting soil properties: {str(e)}")
+        except (ValueError, requests.exceptions.RequestException) as e:
+            logger.error(f"Error getting all soil properties: {e}")
             return None
     
-    def get_comprehensive_soil_analysis(
-        self, 
-        latitude: float, 
-        longitude: float
-    ) -> Optional[Dict]:
+    @staticmethod
+    def extract_property_data(
+        soil_data: Dict[str, Any], 
+        property_name: str, 
+        depth: str = "0-20"
+    ) -> Optional[Dict[str, Any]]:
         """
-        Get comprehensive soil analysis for key agricultural properties
-        
-        Returns data for pH, organic carbon, nitrogen, phosphorus, potassium
-        at 0-20cm depth (topsoil)
+        Extracts the data block for a specific property and depth from the full API response.
+
+        Args:
+            soil_data: The full JSON response from the iSDA API.
+            property_name: The name of the property to extract (e.g., "ph").
+            depth: The specific depth required (e.g., "0-20", "20-50").
+
+        Returns:
+            A dictionary with the property data or None if not found.
         """
         try:
-            key_properties = [
-                "ph",
-                "carbon_organic", 
-                "nitrogen_total",
-                "phosphorous_extractable",
-                "potassium_extractable"
-            ]
+            # The main data is nested under the 'property' key
+            properties = soil_data.get("property", {})
+            property_layers = properties.get(property_name, [])
             
-            results = {}
-            
-            for prop in key_properties:
-                data = self.get_soil_properties(
-                    latitude=latitude,
-                    longitude=longitude,
-                    depth="0-20",
-                    property_name=prop
-                )
-                
-                if data and "property" in data:
-                    results[prop] = data["property"].get(prop, [])
-            
-            return {
-                "latitude": latitude,
-                "longitude": longitude,
-                "depth": "0-20",
-                "properties": results,
-                "analyzed_at": datetime.utcnow().isoformat()
-            }
-            
-        except Exception as e:
-            logger.error(f"Error getting comprehensive analysis: {str(e)}")
+            for layer in property_layers:
+                if layer.get("depth", {}).get("value") == depth:
+                    return layer
             return None
-    
-    def extract_property_value(self, property_data: List[Dict]) -> Optional[float]:
-        """Extract the main value from iSDA property data structure"""
+        except Exception as e:
+            logger.error(f"Error extracting property data for '{property_name}' at depth '{depth}': {e}")
+            return None
+
+    @staticmethod
+    def extract_value(property_data: Dict[str, Any]) -> Optional[Any]:
+        """Extracts the main value from a single property data block."""
         try:
-            if property_data and len(property_data) > 0:
-                value_data = property_data[0].get("value", {})
-                return value_data.get("value")
-            return None
-        except Exception as e:
-            logger.error(f"Error extracting property value: {str(e)}")
-            return None
-    
-    def extract_property_uncertainty(self, property_data: List[Dict]) -> Optional[Tuple[float, float]]:
-        """Extract uncertainty bounds from iSDA property data"""
-        try:
-            if property_data and len(property_data) > 0:
-                uncertainty_data = property_data[0].get("uncertainty", [])
-                if len(uncertainty_data) > 1:
-                    bounds = uncertainty_data[1]
-                    return (bounds.get("lower_bound"), bounds.get("upper_bound"))
-            return None
-        except Exception as e:
-            logger.error(f"Error extracting uncertainty: {str(e)}")
+            return property_data.get("value", {}).get("value")
+        except AttributeError:
+            # Handles case where property_data is None
             return None
 
 # Global instance for the service
 isda_service = ISDAService()
-
