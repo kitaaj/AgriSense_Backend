@@ -12,7 +12,11 @@ def get_users():
 def create_user():
     
     data = request.json
-    user = User(username=data['username'], email=data['email'])
+    if data is None:
+        return jsonify({'error': 'Missing JSON in request'}), 400
+    user = User()
+    user.username = data['username']
+    user.email = data['email']
     db.session.add(user)
     db.session.commit()
     return jsonify(user.to_dict()), 201
@@ -26,6 +30,8 @@ def get_user(user_id):
 def update_user(user_id):
     user = User.query.get_or_404(user_id)
     data = request.json
+    if data is None:
+        return jsonify({'error': 'Missing JSON in request'}), 400
     user.username = data.get('username', user.username)
     user.email = data.get('email', user.email)
     db.session.commit()

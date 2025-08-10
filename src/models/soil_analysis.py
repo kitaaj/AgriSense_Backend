@@ -17,7 +17,7 @@ class SoilAnalysis(db.Model):
     farm = db.relationship('Farm', backref=db.backref('soil_analyses', lazy=True))
 
     def __repr__(self):
-        return f'<SoilAnalysis {self.id} for Farm {self.farm_id}>'
+        return f'<SoilAnalysis id={self.id} for Farm {self.farm_id}>'
 
     def to_dict(self):
         return {

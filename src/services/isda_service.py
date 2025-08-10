@@ -67,7 +67,7 @@ class ISDAService:
             logger.error(f"Error getting iSDA layers: {e}")
             return None
     
-    def get_all_soil_properties(self, latitude: float, longitude: float) -> Optional[Dict]:
+    def get_all_soil_properties(self, latitude: float, longitude: float, depth = "0-20") -> Optional[Dict]:
         """
         Get all available soil properties for a specific location in a single API call.
         This is the primary method to fetch soil data.
@@ -86,7 +86,7 @@ class ISDAService:
                 raise ValueError("Longitude must be between -180 and 180")
             
             headers = self._get_headers()
-            params = {"lat": latitude, "lon": longitude}
+            params = {"lat": latitude, "lon": longitude, "depth": depth}
             
             # By not specifying a 'property' or 'depth', the API returns all available data.
             response = requests.get(
